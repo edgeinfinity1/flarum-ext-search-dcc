@@ -81,6 +81,9 @@ class SearchController extends ListDiscussionsController
         $search = $this->getSearch($filters);
 
         $limit = $this->extractLimit($request);
+        
+        $dyn_limit = $limit < 20 ? 20 : $limit;
+
         $offset = $this->extractOffset($request);
 
         $include = array_merge($this->extractInclude($request), ['state']);
@@ -101,7 +104,7 @@ class SearchController extends ListDiscussionsController
 
         $builder = (new Builder($this->elastic))
             ->index(resolve('blomstra.search.elastic_index'))
-            ->size($limit + 1)
+            ->size($dyn_limit + 1)
             ->from($this->extractOffset($request))
             ->addQuery(
                 $this->addFilters($filterQuery, $actor, $filters)
@@ -177,11 +180,11 @@ class SearchController extends ListDiscussionsController
             ]),
             $request->getQueryParams(),
             $offset,
-            $limit,
-            $results->count() > $limit ? null : 0
+            $dyn_limit,
+            $results->count() > $dyn_limit ? null : 0
         );
 
-        $results = $results->take($limit);
+        $results = $results->take($dyn_limit);
 
         $discussions = Discussion::query()
             ->select('discussions.*')
@@ -207,6 +210,9 @@ class SearchController extends ListDiscussionsController
             ->keyBy('id')
             ->sortByDesc('weight')
             ->unique();
+        if ($limit < 20) {
+            $discussions = $discussions->take($limit);
+        }
 
         $this->loadRelations($discussions, $include);
 
