@@ -71,6 +71,7 @@ class BuildCommand extends Command
                 'recipient_groups' => ['type' => 'integer'],
                 'recipient_users'  => ['type' => 'integer'],
                 'comment_count'    => ['type' => 'integer'],
+                'view_count'       => ['type' => 'integer'],
             ],
         ];
 
@@ -91,11 +92,14 @@ class BuildCommand extends Command
                         'analysis'             => [
                             'analyzer' => [
                                 'flarum_analyzer' => [
-                                    'type' => $settings->get('blomstra-search.analyzer-language') ?: 'english',
+                                    //'type' => $settings->get('blomstra-search.analyzer-language') ?: 'english',
+                                    "type"=> "custom",
+                                    "tokenizer"=> "ik_max_word",
+                                    "filter"=> ["lowercase"],
                                 ],
                                 'flarum_analyzer_partial' => [
                                     'type'      => 'custom',
-                                    'tokenizer' => 'standard',
+                                    'tokenizer' => 'ik_max_word',
                                     'filter'    => [
                                         'lowercase',
                                         'partial_search_filter',
@@ -104,7 +108,7 @@ class BuildCommand extends Command
                             ],
                             'filter' => [
                                 'partial_search_filter' => [
-                                    'type'        => 'ngram',
+                                    'type'        => 'edge_ngram',
                                     'min_gram'    => 1,
                                     'max_gram'    => 10,
                                     'token_chars' => ['letter', 'digit', 'symbol'],

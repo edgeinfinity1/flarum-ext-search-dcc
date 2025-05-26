@@ -47,6 +47,7 @@ class SearchController extends ListDiscussionsController
         'lastPostedAt' => 'updated_at',
         'createdAt'    => 'created_at',
         'commentCount' => 'comment_count',
+        'view_count'   => 'view_count',
     ];
 
     protected Collection $searchers;
@@ -88,13 +89,13 @@ class SearchController extends ListDiscussionsController
 
         if (!empty($search)) {
             if ($this->matchSentences) {
-                $filterQuery->add($this->sentenceMatch($search));
+                $filterQuery->add($this->sentenceMatch($search), 'should');
             }
             if ($this->matchWords) {
-                $filterQuery->add($this->wordMatch($search, 'and'));
+                $filterQuery->add($this->wordMatch($search, 'and'), 'should');
             }
             if ($this->matchWords) {
-                $filterQuery->add($this->wordMatch($search, 'or'));
+                $filterQuery->add($this->wordMatch($search, 'or'), 'should');
             }
         }
 
@@ -108,7 +109,9 @@ class SearchController extends ListDiscussionsController
 
         foreach ($this->extractSort($request) as $field => $direction) {
             $field = $this->translateSort[$field] ?? $field;
-            $builder->addSort(new Sort($field, $direction));
+            if ($field) {
+                $builder->addSort(new Sort($field, $direction));
+            }
         }
 
         $response = $builder->search();
@@ -126,22 +129,44 @@ class SearchController extends ListDiscussionsController
             }
         }
 
+        // Edge made this
+        function calculateWeight($views) {
+            if ($views <= 0) return 0.0;
+            $k = 0.0003389;
+            $x0 = 7500;
+            $steepness = $k * ($views - $x0);
+            $base = 10 / (1 + exp(-$steepness));
+            $transition = 10000;
+            if ($views > $transition) {
+                $slow_rate = ($views - $transition) * 0.00002222;
+                $base = min($base + $slow_rate, 10.0);
+            }
+            return round(max(0, min($base, 10)), 2);
+        }        
+
         // we need to retrieve all discussion ids and when the results are posts,
         // their ids as most relevant post id
         $results = Collection::make(Arr::get($response, 'hits.hits'))
             ->map(function ($hit) {
                 $type = $hit['_source']['type'];
                 $id = Str::after($hit['_source']['id'], "$type:");
-
+                $view_count = 0;
+                if (array_key_exists('view_count', $hit['_source'])) {
+                    $view_count = $hit['_source']['view_count'];
+                }
+                if (!$view_count) {
+                    $view_count = 1;
+                }
+                $calc_weight = Arr::get($hit, '_score') * calculateWeight($view_count);
                 if ($type === 'posts') {
                     return [
                         'most_relevant_post_id' => $id,
-                        'weight'                => Arr::get($hit, 'sort.0'),
+                        'weight'                => $calc_weight,
                     ];
                 } else {
                     return [
                         'discussion_id' => $id,
-                        'weight'        => Arr::get($hit, 'sort.0'),
+                        'weight'        => $calc_weight,
                     ];
                 }
             });
@@ -274,7 +299,7 @@ class SearchController extends ListDiscussionsController
     {
         $query = (new MatchPhraseQuery('content', $q));
 
-        return $this->boolQuery($query, 2);
+        return $this->boolQuery($query, .4);
     }
 
     protected function wordMatch(string $q, string $operator = 'or'): Query

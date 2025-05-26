@@ -88,6 +88,10 @@ class DiscussionSeeder extends Seeder
             'groups'          => $this->groupsForDiscussion($model),
             'comment_count'   => $model->comment_count,
         ]);
+        
+        if (true) {
+            $document['view_count'] = $model->view_count;
+        }
 
         if ($this->extensionEnabled('flarum-tags')) {
             $document['tags'] = $model->tags->pluck('id')->toArray();
