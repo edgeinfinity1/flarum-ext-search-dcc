@@ -32,11 +32,15 @@ use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 use Psr\Http\Message\ServerRequestInterface;
-use Spatie\ElasticsearchQueryBuilder\Builder;
-use Spatie\ElasticsearchQueryBuilder\Queries\BoolQuery;
-use Spatie\ElasticsearchQueryBuilder\Queries\Query;
-use Spatie\ElasticsearchQueryBuilder\Queries\TermQuery;
-use Spatie\ElasticsearchQueryBuilder\Sorts\Sort;
+use ONGR\ElasticsearchDSL\Search;
+use ONGR\ElasticsearchDSL\Query\Compound\BoolQuery as OngrBoolQuery;
+use ONGR\ElasticsearchDSL\Query\Compound\FunctionScoreQuery;
+use ONGR\ElasticsearchDSL\Query\FunctionScore\FieldValueFactorFunction;
+use ONGR\ElasticsearchDSL\Query\TermLevel\TermQuery as OngrTermQuery;
+use ONGR\ElasticsearchDSL\Query\TermLevel\TermsQuery as OngrTermsQuery;
+use ONGR\ElasticsearchDSL\Sort\FieldSort;
+use ONGR\ElasticsearchDSL\Query\FullText\MatchQuery as OngrMatchQuery;
+use ONGR\ElasticsearchDSL\Query\FullText\MatchPhraseQuery as OngrMatchPhraseQuery;
 use Tobscure\JsonApi\Document;
 
 class SearchController extends ListDiscussionsController
@@ -88,37 +92,61 @@ class SearchController extends ListDiscussionsController
 
         $include = array_merge($this->extractInclude($request), ['state']);
 
-        $filterQuery = BoolQuery::create();
+        $filterQuery = new OngrBoolQuery();  // MODIFIED: BoolQuery 替换
+
+        // MODIFIED: 替换 Builder 为 Search
+        $ongr_search = new Search();
+        $ongr_search->setSize($limit + $offset + 1);
+        $ongr_search->setFrom(0);
 
         if (!empty($search)) {
             if ($this->matchSentences) {
-                $filterQuery->add($this->sentenceMatch($search), 'should');
+                // MODIFIED: 适配新的查询结构
+                $filterQuery->add($this->sentenceMatch($search), OngrBoolQuery::SHOULD);
             }
             if ($this->matchWords) {
-                $filterQuery->add($this->wordMatch($search, 'and'), 'should');
-            }
-            if ($this->matchWords) {
-                $filterQuery->add($this->wordMatch($search, 'or'), 'should');
+                $filterQuery->add($this->wordMatch($search, 'and'), OngrBoolQuery::SHOULD);
+                $filterQuery->add($this->wordMatch($search, 'or'), OngrBoolQuery::SHOULD);
             }
         }
+        // MODIFIED: 构建最终查询
+        // $ongr_search->addQuery(
+        //     $this->addFilters($filterQuery, $actor, $filters)
+        // );
 
-        $builder = (new Builder($this->elastic))
-            ->index(resolve('blomstra.search.elastic_index'))
-            ->size($dyn_limit + 1)
-            ->from($this->extractOffset($request))
-            ->addQuery(
-                $this->addFilters($filterQuery, $actor, $filters)
-            );
+        $baseQuery = $this->addFilters($filterQuery, $actor, $filters);
+        
+        // 正确的新版写法：通过构造函数传递函数数组
+        $mainQuery = new FunctionScoreQuery(
+            $baseQuery,      // 主查询
+        );
+
+        $mainQuery->addFieldValueFactorFunction(
+            'view_count',
+            0.1, 
+            'ln1p',
+            null, // 不再需要score_mode参数
+            0.1
+        );
+        // 将主查询设置到搜索对象
+        $ongr_search->addQuery($mainQuery);
+
 
         foreach ($this->extractSort($request) as $field => $direction) {
             $field = $this->translateSort[$field] ?? $field;
             if ($field) {
-                $builder->addSort(new Sort($field, $direction));
+                // $builder->addSort(new Sort($field, $direction));
+                $ongr_search->addSort(new FieldSort($field, strtolower($direction) === 'desc' ? FieldSort::DESC : FieldSort::ASC));
             }
         }
 
-        $response = $builder->search();
-
+        // $response = $builder->search();
+        $dsl = $ongr_search->toArray();
+        $response = $this->elastic->search([
+            'index' => resolve('blomstra.search.elastic_index'),
+            'body'  => $dsl
+        ]);
+        
         Discussion::setStateUser($actor);
 
         // Eager load groups for use in the policies (isAdmin check)
@@ -133,25 +161,26 @@ class SearchController extends ListDiscussionsController
         }
 
         // Edge made this
-        function calculateWeight($views) {
-            if ($views <= 0) return 0.0;
-            $k = 0.0003389;
-            $x0 = 7500;
-            $steepness = $k * ($views - $x0);
-            $base = 10 / (1 + exp(-$steepness));
-            $transition = 10000;
-            if ($views > $transition) {
-                $slow_rate = ($views - $transition) * 0.00002222;
-                $base = min($base + $slow_rate, 10.0);
-            }
-            return round(max(0, min($base, 10)), 2);
-        }        
+        // function calculateWeight($views) {
+        //     if ($views <= 0) return 0.0;
+        //     $k = 0.0003389;
+        //     $x0 = 7500;
+        //     $steepness = $k * ($views - $x0);
+        //     $base = 10 / (1 + exp(-$steepness));
+        //     $transition = 10000;
+        //     if ($views > $transition) {
+        //         $slow_rate = ($views - $transition) * 0.00002222;
+        //         $base = min($base + $slow_rate, 10.0);
+        //     }
+        //     return round(max(0, min($base, 10)), 2);
+        // }        
 
         // we need to retrieve all discussion ids and when the results are posts,
         // their ids as most relevant post id
         $results = Collection::make(Arr::get($response, 'hits.hits'))
             ->map(function ($hit) {
                 $type = $hit['_source']['type'];
+                //echo($hit['_source']['type'].$hit['_source']['content']);
                 $id = Str::after($hit['_source']['id'], "$type:");
                 $view_count = 0;
                 if (array_key_exists('view_count', $hit['_source'])) {
@@ -160,16 +189,17 @@ class SearchController extends ListDiscussionsController
                 if (!$view_count) {
                     $view_count = 1;
                 }
-                $calc_weight = Arr::get($hit, '_score') * calculateWeight($view_count);
+                $score = Arr::get($hit, '_score');
+                // $calc_weight = $score * calculateWeight($view_count);
                 if ($type === 'posts') {
                     return [
                         'most_relevant_post_id' => $id,
-                        'weight'                => $calc_weight,
+                        'weight'                => $score,
                     ];
                 } else {
                     return [
                         'discussion_id' => $id,
-                        'weight'        => $calc_weight,
+                        'weight'        => $score,
                     ];
                 }
             });
@@ -180,39 +210,65 @@ class SearchController extends ListDiscussionsController
             ]),
             $request->getQueryParams(),
             $offset,
-            $dyn_limit,
-            $results->count() > $dyn_limit ? null : 0
+            $limit,
+            $results->count() > $limit ? null : 0
         );
 
-        $results = $results->take($dyn_limit);
+        //$results = $results->take($limit);
+        //echo(count($results));
+
+        $results_prior = $results->take($offset);
+
+        $results_latter = $results->skip($offset)->take($limit);
+        //echo($offset.$limit);
+        
+        $discard_discus_ids = [];
+        //echo(count($results_prior));
+
+        Discussion::query()
+            ->select('discussions.*')
+            ->join('posts', 'posts.discussion_id', 'discussions.id')
+            // Extra safety to prevent leaking hidden discussion (titles) towards search results.
+            ->when($actor->isGuest() || !$actor->hasPermission('discussion.hide'), fn ($query) => $query->whereNull('discussions.hidden_at'))
+            ->where(function ($query) use ($results_prior) {
+                $query
+                    ->whereIn('discussions.id', $results_prior->pluck('discussion_id')->filter())
+                    ->orWhereIn('posts.id', $results_prior->pluck('most_relevant_post_id')->filter());
+            })
+            ->get()
+            ->each(function (Discussion $discussion) use (&$discard_discus_ids) {if (!in_array($discussion->id, $discard_discus_ids)) {array_push($discard_discus_ids, $discussion->id);}})
+            ;
+        //echo(implode(',',$discard_discus_ids));
 
         $discussions = Discussion::query()
             ->select('discussions.*')
             ->join('posts', 'posts.discussion_id', 'discussions.id')
             // Extra safety to prevent leaking hidden discussion (titles) towards search results.
             ->when($actor->isGuest() || !$actor->hasPermission('discussion.hide'), fn ($query) => $query->whereNull('discussions.hidden_at'))
-            ->where(function ($query) use ($results) {
+            ->where(function ($query) use ($results_latter) {
                 $query
-                    ->whereIn('discussions.id', $results->pluck('discussion_id')->filter())
-                    ->orWhereIn('posts.id', $results->pluck('most_relevant_post_id')->filter());
+                    ->whereIn('discussions.id', $results_latter->pluck('discussion_id')->filter())
+                    ->orWhereIn('posts.id', $results_latter->pluck('most_relevant_post_id')->filter());
             })
             ->get()
-            ->each(function (Discussion $discussion) use ($results) {
-                if (in_array($discussion->id, $results->pluck('discussion_id')->toArray())) {
+            ->reject(function (Discussion $discussion) use ($discard_discus_ids) {return in_array($discussion->id, $discard_discus_ids);})
+            ->each(function (Discussion $discussion) use ($results_latter) {
+                if (in_array($discussion->id, $results_latter->pluck('discussion_id')->toArray())) {
                     $discussion->most_relevant_post_id = $discussion->first_post_id;
-                    $discussion->weight = $results->firstWhere('discussion_id', $discussion->id)['weight'] ?? 0;
+                    $discussion->weight = $results_latter->firstWhere('discussion_id', $discussion->id)['weight'] ?? 0;
                 } else {
-                    $post = $discussion->posts()->whereIn('id', $results->pluck('most_relevant_post_id'))->first();
+                    $post = $discussion->posts()->whereIn('id', $results_latter->pluck('most_relevant_post_id'))->first();
                     $discussion->most_relevant_post_id = $post?->id ?? $discussion->first_post_id;
-                    $discussion->weight = $results->firstWhere('most_relevant_post_id', $post?->id)['weight'] ?? 0;
+                    $discussion->weight = $results_latter->firstWhere('most_relevant_post_id', $post?->id)['weight'] ?? 0;
                 }
             })
             ->keyBy('id')
             ->sortByDesc('weight')
             ->unique();
-        if ($limit < 20) {
-            $discussions = $discussions->take($limit);
-        }
+        // if ($limit < 20) {
+        //     $discussions = $discussions->take($limit);
+        // }
+        //echo(count($discussions));
 
         $this->loadRelations($discussions, $include);
 
@@ -246,76 +302,81 @@ class SearchController extends ListDiscussionsController
         return $manager->isEnabled($extension);
     }
 
-    protected function addFilters(BoolQuery $query, User $actor, array $filters = []): BoolQuery
+    protected function addFilters($query, User $actor, array $filters = [])
     {
         $groups = $this->getGroups($actor);
 
         $onlyPrivate = Str::contains($filters['q'] ?? '', 'is:private');
 
-        $subQuery = BoolQuery::create()
-            ->add(TermQuery::create('is_private', 'false'))
-            ->add(TermsQuery::create('groups', $groups->toArray()));
+        $tbool = new OngrBoolQuery();
+        $tbool->add(new OngrTermQuery('is_private', 'false'), OngrBoolQuery::FILTER);
+        $tbool->add(new OngrTermsQuery('groups', $groups->toArray()), OngrBoolQuery::FILTER);
+        $subQuery = $tbool;
+
 
         if ($this->extensionEnabled('fof-byobu') && $actor->exists) {
-            $byobuQuery = BoolQuery::create()
-                ->add(TermQuery::create('is_private', 'true'))
+
+            $byobuQuery = (new OngrBoolQuery())
+                ->add(new OngrTermQuery('is_private', 'true'), OngrBoolQuery::FILTER)
                 ->add(
-                    BoolQuery::create()
-                        ->add(TermsQuery::create('recipient_groups', $groups->toArray()), 'should')
-                        ->add(TermsQuery::create('recipient_users', [$actor->id]), 'should'),
+                    (new OngrBoolQuery())
+                        ->add(new OngrTermsQuery('recipient_groups', $groups->toArray()), OngrBoolQuery::SHOULD)
+                        ->add(new OngrTermsQuery('recipient_users', [$actor->id]), OngrBoolQuery::SHOULD),
+                    OngrBoolQuery::FILTER
                 );
 
             if ($onlyPrivate) {
                 $subQuery = $byobuQuery;
             } else {
-                $subQuery = BoolQuery::create()
-                    ->add($subQuery, 'should')
-                    ->add($byobuQuery, 'should');
+                $subQuery = (new OngrBoolQuery())
+                    ->add($subQuery, OngrBoolQuery::SHOULD)
+                    ->add($byobuQuery, OngrBoolQuery::SHOULD);
             }
+
+
         }
 
-        $query->add(
-            $subQuery,
-            'filter'
-        );
+        $query->add($subQuery,OngrBoolQuery::FILTER);
 
         return $query;
     }
 
-    protected function boolQuery(Query $parent, float $boost = 1): Query
+    protected function boolQuery($parent, float $boost = 1): OngrBoolQuery
     {
-        $bool = new BoolQuery();
+        $bool = new OngrBoolQuery();
 
         /** @var Searcher $searcher */
         foreach ($this->searchers as $searcher) {
             $searcher = new $searcher();
 
+            $tbool = new OngrBoolQuery();
+            $tbool->add(new OngrTermQuery('type', $searcher->type()), OngrBoolQuery::FILTER);
+            $tbool->add($parent->setParameters(['boost' => $boost * $searcher->boost()]));
             $bool->add(
-                BoolQuery::create()
-                    ->add(TermQuery::create('type', $searcher->type()), 'filter')
-                    ->add(clone $parent->boost($boost * $searcher->boost())),
-                'should'
+                $tbool
+                , // MODIFIED: 设置 boost 方式
+                OngrBoolQuery::SHOULD
             );
+
         }
 
         return $bool;
     }
 
-    protected function sentenceMatch(string $q): Query
+    protected function sentenceMatch(string $q): OngrBoolQuery
     {
-        $query = (new MatchPhraseQuery('content', $q));
 
-        return $this->boolQuery($query, .4);
+        $query = new OngrMatchPhraseQuery('content', $q);
+        return $this->boolQuery($query, 0.4);
     }
 
-    protected function wordMatch(string $q, string $operator = 'or'): Query
+    protected function wordMatch(string $q, string $operator = 'or'): OngrBoolQuery
     {
-        $query = (new MatchQuery('content', $q))
-            ->operator($operator);
 
-        $boost = $operator === 'and' ? 1.8 : .8;
-
+        $query = new OngrMatchQuery('content', $q, ['operator' => $operator]);
+        $boost = $operator === 'and' ? 1.8 : 0.8;
         return $this->boolQuery($query, $boost);
+
     }
 
     protected function getGroups(User $actor): Collection
