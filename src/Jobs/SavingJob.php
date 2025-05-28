@@ -26,15 +26,25 @@ class SavingJob extends Job
         }
 
         // Preparing body for storing.
-        $body = $this->models->map(function (Model $model) {
+        $body = $this->models->flatMap(function (Model $model) {
             $document = $this->seeder->toDocument($model);
+
+            $failed = $document->failed ? true : false;
+            if ($failed) { 
+                return [];
+            }
 
             return [
                 ['index' => ['_index' => $this->index, '_id' => $document->id]],
                 $document->toArray(),
             ];
-        })
-        ->flatten(1);
+        });
+        //echo(json_encode($body));
+        // ->flatten(1);
+
+        if ($body->isEmpty()) {
+            return;
+        }
 
         $response = $client->bulk([
             'index'   => $this->index,

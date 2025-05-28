@@ -71,37 +71,47 @@ class CommentSeeder extends Seeder
      */
     public function toDocument(Model $model): Document
     {
-        $document = new Document([
-            'type'            => $this->type(),
-            'id'              => $this->type().':'.$model->id,
-            'rawId'           => $model->id,
-            'content'         => $model->content,
-            'content_partial' => $model->content,
-            'created_at'      => $model->created_at?->toAtomString(),
-            'updated_at'      => $model->edited_at?->toAtomString(),
-            'is_private'      => $model->is_private,
-            'user_id'         => $model->user_id,
-            'groups'          => $this->groupsForDiscussion($model->discussion),
-            'comment_count'   => $model->discussion->comment_count,
-        ]);
+        if (!$model->discussion) {
+            $document = new Document([
+                'id'              => $this->type().':'.$model->id,
+                'rawId'           => $model->id,
+                'failed'=>true,
+            ]);
+            // fail it if discussion not even exist
+        } else {
+            $document = new Document([
+                'type'            => $this->type(),
+                'id'              => $this->type().':'.$model->id,
+                'rawId'           => $model->id,
+                'content'         => $model->content,
+                'content_partial' => $model->content,
+                'created_at'      => $model->created_at?->toAtomString(),
+                'updated_at'      => $model->edited_at?->toAtomString(),
+                'is_private'      => $model->is_private,
+                'user_id'         => $model->user_id,
+                'groups'          => $this->groupsForDiscussion($model->discussion),
+                'comment_count'   => $model->discussion->comment_count,
+            ]);
         
-        if (true) {
-            $document['view_count'] = $model->discussion->view_count;
-        }
+        
+            if (true) {
+                $document['view_count'] = $model->discussion->view_count;
+            }
 
-        if ($this->extensionEnabled('flarum-tags')) {
-            $document['tags'] = $model->discussion->tags->pluck('id')->toArray();
-        }
+            if ($this->extensionEnabled('flarum-tags')) {
+                $document['tags'] = $model->discussion->tags->pluck('id')->toArray();
+            }
 
-        if ($this->extensionEnabled('fof-byobu')) {
-            $document['recipient_users'] = $model->discussion->recipientUsers
-                ->whereNull('removed_at')
-                ->pluck('id')
-                ->toArray();
-            $document['recipient_groups'] = $model->discussion->recipientGroups
-                ->whereNull('removed_at')
-                ->pluck('id')
-                ->toArray();
+            if ($this->extensionEnabled('fof-byobu')) {
+                $document['recipient_users'] = $model->discussion->recipientUsers
+                    ->whereNull('removed_at')
+                    ->pluck('id')
+                    ->toArray();
+                $document['recipient_groups'] = $model->discussion->recipientGroups
+                    ->whereNull('removed_at')
+                    ->pluck('id')
+                    ->toArray();
+            }
         }
 
         return $document;

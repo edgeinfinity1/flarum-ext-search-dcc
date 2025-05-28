@@ -27,6 +27,7 @@ use Flarum\Http\RequestUtil;
 use Flarum\Http\UrlGenerator;
 use Flarum\Settings\SettingsRepositoryInterface;
 use Flarum\User\User;
+use Flarum\Tags\TagRepository;
 use Illuminate\Contracts\Container\Container;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
@@ -55,12 +56,14 @@ class SearchController extends ListDiscussionsController
     ];
 
     protected Collection $searchers;
+    protected TagRepository $tagrepo;
     protected bool $matchSentences;
     protected bool $matchWords;
 
     public function __construct(protected Client $elastic, protected UrlGenerator $uri, Container $container, SettingsRepositoryInterface $settings)
     {
         $this->searchers = $this->gatherSearchers($container->tagged('blomstra.search.searchers'));
+        $this->tagrepo = new TagRepository();
 
         $this->matchSentences = true;
         $this->matchWords = true;
@@ -92,12 +95,18 @@ class SearchController extends ListDiscussionsController
 
         $include = array_merge($this->extractInclude($request), ['state']);
 
+        $tag = Arr::pull($request->getQueryParams(), 'filter.tag', '');
+        $tag = $this->tagrepo->getIdForSlug($tag, $actor);
+
         $filterQuery = new OngrBoolQuery();  // MODIFIED: BoolQuery 替换
 
         // MODIFIED: 替换 Builder 为 Search
         $ongr_search = new Search();
         $ongr_search->setSize($limit + $offset + 1);
         $ongr_search->setFrom(0);
+        $ongr_search->setMinScore(0);
+
+        //echo($search);
 
         if (!empty($search)) {
             if ($this->matchSentences) {
@@ -109,6 +118,12 @@ class SearchController extends ListDiscussionsController
                 $filterQuery->add($this->wordMatch($search, 'or'), OngrBoolQuery::SHOULD);
             }
         }
+        //echo(json_encode($request->getQueryParams()));
+        if (!empty($tag)) {
+            $tagFilter = new OngrTermQuery('tags', $tag);
+            $filterQuery->add($tagFilter, OngrBoolQuery::FILTER);
+        }
+
         // MODIFIED: 构建最终查询
         // $ongr_search->addQuery(
         //     $this->addFilters($filterQuery, $actor, $filters)
@@ -117,31 +132,40 @@ class SearchController extends ListDiscussionsController
         $baseQuery = $this->addFilters($filterQuery, $actor, $filters);
         
         // 正确的新版写法：通过构造函数传递函数数组
-        $mainQuery = new FunctionScoreQuery(
-            $baseQuery,      // 主查询
-        );
+        
 
-        $mainQuery->addFieldValueFactorFunction(
-            'view_count',
-            0.1, 
-            'ln1p',
-            null, // 不再需要score_mode参数
-            0.1
-        );
-        // 将主查询设置到搜索对象
-        $ongr_search->addQuery($mainQuery);
-
-
+        $sorts_all = [];
         foreach ($this->extractSort($request) as $field => $direction) {
             $field = $this->translateSort[$field] ?? $field;
             if ($field) {
+                //echo($field);
                 // $builder->addSort(new Sort($field, $direction));
                 $ongr_search->addSort(new FieldSort($field, strtolower($direction) === 'desc' ? FieldSort::DESC : FieldSort::ASC));
+                array_push($sorts_all, $field);
+            } 
+            if (!$sorts_all) {
+                $mainQuery = new FunctionScoreQuery(
+                    $baseQuery,      // 主查询
+                );
+        
+                $mainQuery->addFieldValueFactorFunction(
+                    'view_count',
+                    0.1, 
+                    'ln1p',
+                    null, // 不再需要score_mode参数
+                    0.1
+                );
+                // 将主查询设置到搜索对象
+                $ongr_search->addQuery($mainQuery);
+            } else {
+                $ongr_search->addQuery($baseQuery);
             }
         }
 
+
         // $response = $builder->search();
         $dsl = $ongr_search->toArray();
+        //echo(json_encode($dsl, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
         $response = $this->elastic->search([
             'index' => resolve('blomstra.search.elastic_index'),
             'body'  => $dsl
@@ -190,6 +214,8 @@ class SearchController extends ListDiscussionsController
                     $view_count = 1;
                 }
                 $score = Arr::get($hit, '_score');
+                // $lpa = strtotime(Arr::get($hit, '_source.updated_at') || Arr::get($hit, '_source.created-at'));
+                // $crt = strtotime(Arr::get($hit, '_source.created-at'));
                 // $calc_weight = $score * calculateWeight($view_count);
                 if ($type === 'posts') {
                     return [
@@ -252,7 +278,7 @@ class SearchController extends ListDiscussionsController
             })
             ->get()
             ->reject(function (Discussion $discussion) use ($discard_discus_ids) {return in_array($discussion->id, $discard_discus_ids);})
-            ->each(function (Discussion $discussion) use ($results_latter) {
+            ->each(function (Discussion $discussion) use ($results_latter, $sorts_all) {
                 if (in_array($discussion->id, $results_latter->pluck('discussion_id')->toArray())) {
                     $discussion->most_relevant_post_id = $discussion->first_post_id;
                     $discussion->weight = $results_latter->firstWhere('discussion_id', $discussion->id)['weight'] ?? 0;
@@ -261,9 +287,23 @@ class SearchController extends ListDiscussionsController
                     $discussion->most_relevant_post_id = $post?->id ?? $discussion->first_post_id;
                     $discussion->weight = $results_latter->firstWhere('most_relevant_post_id', $post?->id)['weight'] ?? 0;
                 }
+                $filter_weight = 1;
+                foreach($sorts_all as $sorting) {
+                    //echo(strtotime($discussion->last_posted_at));
+                    $discussion->filter_weight += match($sorting) {
+                        'updated_at' => strtotime($discussion->last_posted_at ?: $discussion->created_at),
+                        'created_at' => strtotime($discussion->created_at),
+                        'comment_count' => $discussion->comment_count,
+                        'view_count' => $discussion->view_count,
+                    };
+                    //echo($discussion->filter_weight);
+                }
+                //$discussion->
             })
             ->keyBy('id')
-            ->sortByDesc('weight')
+            ->when(!$sorts_all, function($discussions) {return $discussions->sortByDesc('weight');})
+            ->when($sorts_all, function($discussions) {return $discussions->sortByDesc('filter_weight');})
+            //->sortByDesc('weight')
             ->unique();
         // if ($limit < 20) {
         //     $discussions = $discussions->take($limit);

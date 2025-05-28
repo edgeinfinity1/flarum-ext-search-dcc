@@ -19,13 +19,17 @@ use Elasticsearch\Client;
 use Flarum\Settings\SettingsRepositoryInterface;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Container\Container;
+use Illuminate\Contracts\Bus\Dispatcher;
 use Illuminate\Contracts\Queue\Queue;
+use Illuminate\Support\Facades\Bus;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Arr;
 use Spatie\ElasticsearchQueryBuilder\Builder;
 use Spatie\ElasticsearchQueryBuilder\Queries\BoolQuery;
 use Spatie\ElasticsearchQueryBuilder\Queries\RangeQuery;
 use Spatie\ElasticsearchQueryBuilder\Queries\TermQuery;
+
+use Illuminate\Container\Container as Cont;
 
 class BuildCommand extends Command
 {
@@ -36,7 +40,8 @@ class BuildCommand extends Command
         {--recreate : create or recreate the index}
         {--mapping : recreate the mapping}
         {--continue : continue each object type where you left off}
-        {--seed-missing : attempt to seed only objects that are missing in the index}';
+        {--seed-missing : attempt to seed only objects that are missing in the index}
+        {--find-missing : attempt to find objects that are missing in the index}';
 
     protected $description = 'Rebuilds the complete search server with its documents.';
 
@@ -88,18 +93,18 @@ class BuildCommand extends Command
                 'index' => $index,
                 'body'  => [
                     'settings' => [
-                        'index.max_ngram_diff' => 10,
+                        'index.max_ngram_diff' => 20,
                         'analysis'             => [
                             'analyzer' => [
                                 'flarum_analyzer' => [
                                     //'type' => $settings->get('blomstra-search.analyzer-language') ?: 'english',
                                     "type"=> "custom",
-                                    "tokenizer"=> "ik_max_word",
+                                    "tokenizer"=> "ik_smart",
                                     "filter"=> ["lowercase"],
                                 ],
                                 'flarum_analyzer_partial' => [
                                     'type'      => 'custom',
-                                    'tokenizer' => 'ik_max_word',
+                                    'tokenizer' => 'ik_smart',
                                     'filter'    => [
                                         'lowercase',
                                         'partial_search_filter',
@@ -109,8 +114,8 @@ class BuildCommand extends Command
                             'filter' => [
                                 'partial_search_filter' => [
                                     'type'        => 'edge_ngram',
-                                    'min_gram'    => 1,
-                                    'max_gram'    => 10,
+                                    'min_gram'    => 2,
+                                    'max_gram'    => 20,
                                     'token_chars' => ['letter', 'digit', 'symbol'],
                                 ],
                             ],
@@ -143,10 +148,11 @@ class BuildCommand extends Command
                 ? ($this->continueAt($seeder->type()) ?? $seeder->query()->max('id'))
                 : $seeder->query()->max('id');
 
-            $seeded = null;
+            $seeded = [];
+            //$this->info($continueAt);
 
             while ($continueAt !== null) {
-                if ($this->option('seed-missing')) {
+                if ($this->option('seed-missing') || $this->option('find-missing')) {
                     $response = (new Builder($client))
                         ->index($index)
                         ->size(1000)
@@ -165,19 +171,82 @@ class BuildCommand extends Command
                 /** @var Collection $collection */
                 $collection = $seeder->query()
                     ->latest('id')
-                    ->whereBetween('id', [$continueAt - 1000, $continueAt])
+                    ->where('id', '<=', $continueAt)
+                    ->where('id', '>', $continueAt - 1000)
                     ->when($this->option('max-id'), function ($query, $id) {
                         $query->where('id', '<=', $id);
                     })
                     ->when($seeded, fn ($query, $seeded) => $query->whereNotIn('id', $seeded))
                     ->get();
 
-                $min = $collection->min('id');
-                $continueAt = $min && $min > 2 ? $min - 1 : null;
+                if ($collection->isNotEmpty()) {
+                    $min = $collection->min('id');
+                    $continueAt = $min > 1 ? $min - 1 : null;
 
-                $queue->pushOn(Job::$onQueue, new SavingJob($collection, $seeder));
+                    // $this->info($collection->first()->toJson());
 
-                $this->info("Pushed into the index, type: {$seeder->type()}, amount: {$collection->count()}.");
+                } else {
+                    $continueAt -= 1000;
+                    if ($continueAt < 0) {
+                        $continueAt = null;
+                    }
+                }
+
+
+                // if (!Cont::getInstance()->has(Dispatcher::class)) {
+                //     Cont::setInstance($this->laravel); // 传递 Laravel 实例
+                // }
+                
+
+                // try {
+                //     $job = new SavingJob($collection, $seeder);
+                //     $result = app('bus')->dispatchSync($job);
+                
+                //     // 获取任务执行状态
+                //     $this->info("任务执行状态: ".$job->getStatus());
+                //     $this->info("处理记录数: ".$job->getProcessedCount());
+                    
+                // } catch (\Exception $e) {
+                //     $this->error("任务失败: ".$e->getMessage());
+                //     $this->error("失败记录ID: ".$collection->pluck('id')->join(','));
+                // }
+
+                if (!$this->option('find-missing')){
+                    $queue->pushOn(Job::$onQueue, new SavingJob($collection, $seeder));
+
+                    // $restest = new SavingJob($collection, $seeder);
+                    // $restest = $restest->handle($client);
+                    // $this->info(json_encode($restest));
+                }
+
+
+
+                // $chunks = $collection->chunk(100); // 将1000条拆分为10个100条的小块
+
+                // foreach ($chunks as $chunk) {
+                //     try {
+                //         // 尝试处理每个小块
+                //         $queue->pushOn(Job::$onQueue, new SavingJob($chunk, $seeder));
+                        
+                //         // 记录成功处理的ID
+                //         $seeded = array_merge($seeded, $chunk->pluck('id')->toArray());
+                //     } catch (\Exception $e) {
+                //         // 小块失败时降级为逐条处理
+                //         foreach ($chunk as $item) {
+                //             try {
+                //                 $queue->pushOn(Job::$onQueue, new SavingJob(collect([$item]), $seeder));
+                //                 $seeded[] = $item->id;
+                //             } catch (\Exception $singleError) {
+                //                 // 记录错误条目
+                //                 Log::error('Failed item: '.$item->id, [$singleError->getMessage()]);
+                //             }
+                //         }
+                //     }
+                // }
+
+
+
+                $this->info("Pushed into the index, type: {$seeder->type()}, amount: {$collection->count()}, position: {$collection->min('id')}-{$collection->max('id')}.");
 
                 $total += $collection->count();
 
