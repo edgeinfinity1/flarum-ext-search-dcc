@@ -1,3 +1,18 @@
+## Necessary Modification
+`flarum/core/src/Api/Controller/ListDiscussionsController.php`
+``` 
+    public $sort = ['lastPostedAt' => 'desc'];
+//=>
+    public $sort = ['' => 'desc'];
+
+
+    $sort = $this->extractSort($request);
+//++
+    if (!$search && !array_keys($sort)[0]) {
+        $sort = ['lastPostedAt' => 'desc'];
+    }
+```
+
 ![](https://extiverse.com/extension/blomstra/search/open-graph-image)
 
 Search replaces the native Flarum search functionality which relies on MySQL badly performing
