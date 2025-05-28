@@ -99,12 +99,12 @@ class BuildCommand extends Command
                                 'flarum_analyzer' => [
                                     //'type' => $settings->get('blomstra-search.analyzer-language') ?: 'english',
                                     "type"=> "custom",
-                                    "tokenizer"=> "ik_smart",
+                                    "tokenizer"=> "ik_max_word",
                                     "filter"=> ["lowercase"],
                                 ],
                                 'flarum_analyzer_partial' => [
                                     'type'      => 'custom',
-                                    'tokenizer' => 'ik_smart',
+                                    'tokenizer' => 'ik_max_word',
                                     'filter'    => [
                                         'lowercase',
                                         'partial_search_filter',

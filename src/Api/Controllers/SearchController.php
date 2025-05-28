@@ -104,7 +104,7 @@ class SearchController extends ListDiscussionsController
         $ongr_search = new Search();
         $ongr_search->setSize($limit + $offset + 1);
         $ongr_search->setFrom(0);
-        $ongr_search->setMinScore(0);
+        $ongr_search->setMinScore(0.5);
 
         //echo($search);
 
