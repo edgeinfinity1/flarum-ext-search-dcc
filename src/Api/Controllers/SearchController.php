@@ -354,7 +354,7 @@ class SearchController extends ListDiscussionsController
         $subQuery = $tbool;
 
 
-        if ($this->extensionEnabled('fof-byobu') && $actor->exists) {
+        if ($this->extensionEnabled('fof/byobu') && $actor->exists) {
 
             $byobuQuery = (new OngrBoolQuery())
                 ->add(new OngrTermQuery('is_private', 'true'), OngrBoolQuery::FILTER)

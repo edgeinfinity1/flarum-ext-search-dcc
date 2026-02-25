@@ -32,11 +32,11 @@ class DiscussionSeeder extends Seeder
     {
         $includes = [];
 
-        if ($this->extensionEnabled('flarum-tags')) {
+        if ($this->extensionEnabled('flarum/tags')) {
             $includes[] = 'tags';
         }
 
-        if ($this->extensionEnabled('fof-byobu')) {
+        if ($this->extensionEnabled('fof/byobu')) {
             $includes[] = 'recipientUsers';
             $includes[] = 'recipientGroups';
         }
@@ -89,15 +89,15 @@ class DiscussionSeeder extends Seeder
             'comment_count'   => $model->comment_count,
         ]);
         
-        if (true) {
+        if ($this->extensionEnabled('michaelbelgium/flarum-discussion-views')) {
             $document['view_count'] = $model->view_count;
         }
 
-        if ($this->extensionEnabled('flarum-tags')) {
+        if ($this->extensionEnabled('flarum/tags')) {
             $document['tags'] = $model->tags->pluck('id')->toArray();
         }
 
-        if ($this->extensionEnabled('fof-byobu')) {
+        if ($this->extensionEnabled('fof/byobu')) {
             $document['recipient_users'] = $model->recipientUsers
                 ->whereNull('removed_at')
                 ->pluck('id')
@@ -108,7 +108,7 @@ class DiscussionSeeder extends Seeder
                 ->toArray();
         }
 
-        if ($this->extensionEnabled('flarum-sticky')) {
+        if ($this->extensionEnabled('flarum/sticky')) {
             $document['is_sticky'] = (bool) $model->is_sticky;
         }
 
