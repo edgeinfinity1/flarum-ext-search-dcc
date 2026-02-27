@@ -21,6 +21,7 @@ use Elasticsearch\Client;
 use Flarum\Api\Controller\ListDiscussionsController;
 use Flarum\Api\Serializer\DiscussionSerializer;
 use Flarum\Discussion\Discussion;
+use Flarum\Extension\ExtensionManager;
 use Flarum\Http\RequestUtil;
 use Flarum\Http\UrlGenerator;
 use Flarum\Settings\SettingsRepositoryInterface;
@@ -333,6 +334,14 @@ class SearchController extends ListDiscussionsController
         return collect($documents)->first(function (ElasticDocument $document) use ($type) {
             return $document->type() === $type;
         });
+    }
+
+    protected function extensionEnabled(string $extension): bool
+    {
+        /** @var ExtensionManager $manager */
+        $manager = resolve(ExtensionManager::class);
+
+        return $manager->isEnabled($extension);
     }
 
     protected function boolQuery($parent, float $boost = 1): OngrBoolQuery
