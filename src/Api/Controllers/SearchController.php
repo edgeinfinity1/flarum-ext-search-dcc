@@ -22,11 +22,9 @@ use Flarum\Api\Controller\ListDiscussionsController;
 use Flarum\Api\Serializer\DiscussionSerializer;
 use Flarum\Discussion\Discussion;
 use Flarum\Extension\ExtensionManager;
-use Flarum\Group\Group;
 use Flarum\Http\RequestUtil;
 use Flarum\Http\UrlGenerator;
 use Flarum\Settings\SettingsRepositoryInterface;
-use Flarum\User\User;
 use Flarum\Tags\TagRepository;
 use Illuminate\Contracts\Container\Container;
 use Illuminate\Support\Arr;
@@ -38,7 +36,6 @@ use ONGR\ElasticsearchDSL\Query\Compound\BoolQuery as OngrBoolQuery;
 use ONGR\ElasticsearchDSL\Query\Compound\FunctionScoreQuery;
 use ONGR\ElasticsearchDSL\Query\FunctionScore\FieldValueFactorFunction;
 use ONGR\ElasticsearchDSL\Query\TermLevel\TermQuery as OngrTermQuery;
-use ONGR\ElasticsearchDSL\Query\TermLevel\TermsQuery as OngrTermsQuery;
 use ONGR\ElasticsearchDSL\Sort\FieldSort;
 use ONGR\ElasticsearchDSL\Query\FullText\MatchQuery as OngrMatchQuery;
 use ONGR\ElasticsearchDSL\Query\FullText\MatchPhraseQuery as OngrMatchPhraseQuery;
@@ -124,12 +121,12 @@ class SearchController extends ListDiscussionsController
             $filterQuery->add($tagFilter, OngrBoolQuery::FILTER);
         }
 
-        // MODIFIED: 构建最终查询
-        // $ongr_search->addQuery(
-        //     $this->addFilters($filterQuery, $actor, $filters)
-        // );
+        $onlyPrivate = Str::contains($filters['q'] ?? '', 'is:private');
+        if ($onlyPrivate) {
+            $filterQuery->add(new OngrTermQuery('is_private', 'true'), OngrBoolQuery::FILTER);
+        }
 
-        $baseQuery = $this->addFilters($filterQuery, $actor, $filters);
+        $baseQuery = $filterQuery;
         
         // 正确的新版写法：通过构造函数传递函数数组
         
@@ -347,45 +344,6 @@ class SearchController extends ListDiscussionsController
         return $manager->isEnabled($extension);
     }
 
-    protected function addFilters($query, User $actor, array $filters = [])
-    {
-        $groups = $this->getGroups($actor);
-
-        $onlyPrivate = Str::contains($filters['q'] ?? '', 'is:private');
-
-        $tbool = new OngrBoolQuery();
-        $tbool->add(new OngrTermQuery('is_private', 'false'), OngrBoolQuery::FILTER);
-        $tbool->add(new OngrTermsQuery('groups', $groups->toArray()), OngrBoolQuery::FILTER);
-        $subQuery = $tbool;
-
-
-        if ($this->extensionEnabled('fof/byobu') && $actor->exists) {
-
-            $byobuQuery = (new OngrBoolQuery())
-                ->add(new OngrTermQuery('is_private', 'true'), OngrBoolQuery::FILTER)
-                ->add(
-                    (new OngrBoolQuery())
-                        ->add(new OngrTermsQuery('recipient_groups', $groups->toArray()), OngrBoolQuery::SHOULD)
-                        ->add(new OngrTermsQuery('recipient_users', [$actor->id]), OngrBoolQuery::SHOULD),
-                    OngrBoolQuery::FILTER
-                );
-
-            if ($onlyPrivate) {
-                $subQuery = $byobuQuery;
-            } else {
-                $subQuery = (new OngrBoolQuery())
-                    ->add($subQuery, OngrBoolQuery::SHOULD)
-                    ->add($byobuQuery, OngrBoolQuery::SHOULD);
-            }
-
-
-        }
-
-        $query->add($subQuery,OngrBoolQuery::FILTER);
-
-        return $query;
-    }
-
     protected function boolQuery($parent, float $boost = 1): OngrBoolQuery
     {
         $bool = new OngrBoolQuery();
@@ -422,20 +380,6 @@ class SearchController extends ListDiscussionsController
         $boost = $operator === 'and' ? 1.8 : 0.8;
         return $this->boolQuery($query, $boost);
 
-    }
-
-    protected function getGroups(User $actor): Collection
-    {
-        /** @var Collection $groups */
-        $groups = $actor->groups->pluck('id');
-
-        $groups->add(Group::GUEST_ID);
-
-        if ($actor->is_email_confirmed) {
-            $groups->add(Group::MEMBER_ID);
-        }
-
-        return $groups;
     }
 
     protected function getSearch(array $filters): ?string
