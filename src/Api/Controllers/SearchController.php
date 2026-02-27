@@ -254,6 +254,7 @@ class SearchController extends ListDiscussionsController
         Discussion::query()
             ->select('discussions.*')
             ->join('posts', 'posts.discussion_id', 'discussions.id')
+            ->whereVisibleTo($actor)
             // Extra safety to prevent leaking hidden discussion (titles) towards search results.
             ->when($actor->isGuest() || !$actor->hasPermission('discussion.hide'), fn ($query) => $query->whereNull('discussions.hidden_at'))
             ->where(function ($query) use ($results_prior) {
@@ -269,6 +270,7 @@ class SearchController extends ListDiscussionsController
         $discussions = Discussion::query()
             ->select('discussions.*')
             ->join('posts', 'posts.discussion_id', 'discussions.id')
+            ->whereVisibleTo($actor)
             // Extra safety to prevent leaking hidden discussion (titles) towards search results.
             ->when($actor->isGuest() || !$actor->hasPermission('discussion.hide'), fn ($query) => $query->whereNull('discussions.hidden_at'))
             ->where(function ($query) use ($results_latter) {
@@ -278,12 +280,15 @@ class SearchController extends ListDiscussionsController
             })
             ->get()
             ->reject(function (Discussion $discussion) use ($discard_discus_ids) {return in_array($discussion->id, $discard_discus_ids);})
-            ->each(function (Discussion $discussion) use ($results_latter, $sorts_all) {
+            ->each(function (Discussion $discussion) use ($results_latter, $sorts_all, $actor) {
                 if (in_array($discussion->id, $results_latter->pluck('discussion_id')->toArray())) {
                     $discussion->most_relevant_post_id = $discussion->first_post_id;
                     $discussion->weight = $results_latter->firstWhere('discussion_id', $discussion->id)['weight'] ?? 0;
                 } else {
-                    $post = $discussion->posts()->whereIn('id', $results_latter->pluck('most_relevant_post_id'))->first();
+                    $post = $discussion->posts()
+                        ->whereVisibleTo($actor)
+                        ->whereIn('id', $results_latter->pluck('most_relevant_post_id'))
+                        ->first();
                     $discussion->most_relevant_post_id = $post?->id ?? $discussion->first_post_id;
                     $discussion->weight = $results_latter->firstWhere('most_relevant_post_id', $post?->id)['weight'] ?? 0;
                 }
