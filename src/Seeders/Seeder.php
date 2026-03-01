@@ -43,7 +43,7 @@ abstract class Seeder
             ->where('permission', 'viewForum')
             ->pluck('group_id');
 
-        if ($this->extensionEnabled('flarum/tags')) {
+        if ($this->extensionEnabled('flarum-tags')) {
             /** @var Collection $tags */
             $tags = $discussion->tags;
 

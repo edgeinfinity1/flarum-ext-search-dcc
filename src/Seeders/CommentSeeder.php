@@ -31,11 +31,11 @@ class CommentSeeder extends Seeder
     {
         $includes = ['discussion'];
 
-        if ($this->extensionEnabled('flarum/tags')) {
+        if ($this->extensionEnabled('flarum-tags')) {
             $includes[] = 'discussion.tags';
         }
 
-        if ($this->extensionEnabled('fof/byobu')) {
+        if ($this->extensionEnabled('fof-byobu')) {
             $includes[] = 'discussion.recipientUsers';
             $includes[] = 'discussion.recipientGroups';
         }
@@ -94,15 +94,15 @@ class CommentSeeder extends Seeder
             ]);
         
         
-            if ($this->extensionEnabled('michaelbelgium/flarum-discussion-views')) {
+            if ($this->extensionEnabled('michaelbelgium-flarum-discussion-views')) {
                 $document['view_count'] = $model->discussion->view_count;
             }
 
-            if ($this->extensionEnabled('flarum/tags')) {
+            if ($this->extensionEnabled('flarum-tags')) {
                 $document['tags'] = $model->discussion->tags->pluck('id')->toArray();
             }
 
-            if ($this->extensionEnabled('fof/byobu')) {
+            if ($this->extensionEnabled('fof-byobu')) {
                 $document['recipient_users'] = $model->discussion->recipientUsers
                     ->whereNull('removed_at')
                     ->pluck('id')
