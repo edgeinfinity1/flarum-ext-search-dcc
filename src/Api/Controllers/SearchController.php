@@ -129,7 +129,6 @@ class SearchController extends ListDiscussionsController
         $baseQuery = $filterQuery;
         
         // 正确的新版写法：通过构造函数传递函数数组
-        
 
         $sorts_all = [];
         foreach ($this->extractSort($request) as $field => $direction) {
@@ -149,7 +148,7 @@ class SearchController extends ListDiscussionsController
                 "
                     double x = doc['view_count'].size() == 0 ? 0 : doc['view_count'].value;
                     double popularity = Math.log(1 + x);
-                    return (_score == null ? 0 : _score) * (1 + popularity);
+                    return _score * (1 + popularity);
                 "
             );
 
@@ -158,7 +157,6 @@ class SearchController extends ListDiscussionsController
         } else {
             $ongr_search->addQuery($baseQuery);
         }
-
 
         // $response = $builder->search();
         $dsl = $ongr_search->toArray();
@@ -170,7 +168,6 @@ class SearchController extends ListDiscussionsController
         
         Discussion::setStateUser($actor);
 
-        // Eager load groups for use in the policies (isAdmin check)
         if (in_array('mostRelevantPost.user', $include)) {
             $include[] = 'mostRelevantPost.user.groups';
 
@@ -181,23 +178,6 @@ class SearchController extends ListDiscussionsController
             }
         }
 
-        // Edge made this
-        // function calculateWeight($views) {
-        //     if ($views <= 0) return 0.0;
-        //     $k = 0.0003389;
-        //     $x0 = 7500;
-        //     $steepness = $k * ($views - $x0);
-        //     $base = 10 / (1 + exp(-$steepness));
-        //     $transition = 10000;
-        //     if ($views > $transition) {
-        //         $slow_rate = ($views - $transition) * 0.00002222;
-        //         $base = min($base + $slow_rate, 10.0);
-        //     }
-        //     return round(max(0, min($base, 10)), 2);
-        // }        
-
-        // we need to retrieve all discussion ids and when the results are posts,
-        // their ids as most relevant post id
         $results = Collection::make(Arr::get($response, 'hits.hits'))
             ->map(function ($hit) {
                 $type = $hit['_source']['type'];

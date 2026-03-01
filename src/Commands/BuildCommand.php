@@ -65,7 +65,18 @@ class BuildCommand extends Command
         // Elastic scheme definition.
         $properties = [
             'properties' => [
-                'content'          => ['type' => 'text', 'analyzer' => 'flarum_analyzer_partial', 'search_analyzer' => 'flarum_analyzer'],
+                'content'          => [
+                    'type' => 'text',
+                    'analyzer' => 'flarum_analyzer',
+                    'search_analyzer' => 'flarum_analyzer',
+                    'fields' => [
+                        'partial' => [
+                            'type' => 'text',
+                            'analyzer' => 'flarum_analyzer_partial',
+                            'search_analyzer' => 'flarum_analyzer',
+                        ],
+                    ],
+                ],
                 'rawId'            => ['type' => 'integer'],
                 'created_at'       => ['type' => 'date'],
                 'updated_at'       => ['type' => 'date'],
