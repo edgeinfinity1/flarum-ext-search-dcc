@@ -139,25 +139,24 @@ class SearchController extends ListDiscussionsController
                 // $builder->addSort(new Sort($field, $direction));
                 $ongr_search->addSort(new FieldSort($field, strtolower($direction) === 'desc' ? FieldSort::DESC : FieldSort::ASC));
                 array_push($sorts_all, $field);
-            } 
-            if (!$sorts_all) {
-                $mainQuery = new FunctionScoreQuery(
-                    $baseQuery,      // 主查询
-                );
-        
-                $mainQuery->addScriptScoreFunction(
-                    "
-                        double x = doc['view_count'].size() == 0 ? 0 : doc['view_count'].value;
-                        double popularity = Math.log(1 + x);
-                        return _score * (1 + popularity);
-                    ",
-                    ['limit' => 1000]
-                );
-                // 将主查询设置到搜索对象
-                $ongr_search->addQuery($mainQuery);
-            } else {
-                $ongr_search->addQuery($baseQuery);
             }
+        }
+
+        if (!$sorts_all) {
+            $mainQuery = new FunctionScoreQuery($baseQuery);
+
+            $mainQuery->addScriptScoreFunction(
+                "
+                    double x = doc['view_count'].size() == 0 ? 0 : doc['view_count'].value;
+                    double popularity = Math.log(1 + x);
+                    return (_score == null ? 0 : _score) * (1 + popularity);
+                "
+            );
+
+            // 将主查询设置到搜索对象
+            $ongr_search->addQuery($mainQuery);
+        } else {
+            $ongr_search->addQuery($baseQuery);
         }
 
 
