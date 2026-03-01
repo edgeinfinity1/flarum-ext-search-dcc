@@ -94,7 +94,7 @@ class CommentSeeder extends Seeder
             ]);
         
         
-            if ($this->extensionEnabled('michaelbelgium-flarum-discussion-views')) {
+            if ($this->extensionEnabled('michaelbelgium-discussion-views')) {
                 $document['view_count'] = $model->discussion->view_count;
             }
 
