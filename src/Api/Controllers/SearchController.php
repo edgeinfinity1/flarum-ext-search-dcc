@@ -145,12 +145,13 @@ class SearchController extends ListDiscussionsController
                     $baseQuery,      // 主查询
                 );
         
-                $mainQuery->addFieldValueFactorFunction(
-                    'view_count',
-                    0.1, 
-                    'ln1p',
-                    null, // 不再需要score_mode参数
-                    0.1
+                $mainQuery->addScriptScoreFunction(
+                    "
+                        double x = doc['view_count'].size() == 0 ? 0 : doc['view_count'].value;
+                        double popularity = Math.log(1 + x);
+                        return _score * (1 + popularity);
+                    ",
+                    ['limit' => 1000]
                 );
                 // 将主查询设置到搜索对象
                 $ongr_search->addQuery($mainQuery);
@@ -203,17 +204,8 @@ class SearchController extends ListDiscussionsController
                 $type = $hit['_source']['type'];
                 //echo($hit['_source']['type'].$hit['_source']['content']);
                 $id = Str::after($hit['_source']['id'], "$type:");
-                $view_count = 0;
-                if (array_key_exists('view_count', $hit['_source'])) {
-                    $view_count = $hit['_source']['view_count'];
-                }
-                if (!$view_count) {
-                    $view_count = 1;
-                }
                 $score = Arr::get($hit, '_score');
-                // $lpa = strtotime(Arr::get($hit, '_source.updated_at') || Arr::get($hit, '_source.created-at'));
-                // $crt = strtotime(Arr::get($hit, '_source.created-at'));
-                // $calc_weight = $score * calculateWeight($view_count);
+
                 if ($type === 'posts') {
                     return [
                         'most_relevant_post_id' => $id,
@@ -370,14 +362,14 @@ class SearchController extends ListDiscussionsController
     {
 
         $query = new OngrMatchPhraseQuery('content', $q);
-        return $this->boolQuery($query, 0.4);
+        return $this->boolQuery($query, 0.1);
     }
 
     protected function wordMatch(string $q, string $operator = 'or'): OngrBoolQuery
     {
 
         $query = new OngrMatchQuery('content', $q, ['operator' => $operator]);
-        $boost = $operator === 'and' ? 1.8 : 0.8;
+        $boost = $operator === 'and' ? 2.0 : 1.0;
         return $this->boolQuery($query, $boost);
 
     }
