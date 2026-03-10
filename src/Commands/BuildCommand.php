@@ -89,6 +89,7 @@ class BuildCommand extends Command
                 'comment_count'    => ['type' => 'integer'],
                 'view_count'       => ['type' => 'integer'],
                 'is_stickiest'     => ['type' => 'boolean'],
+                'is_tag_sticky'    => ['type' => 'boolean'],
             ],
         ];
 

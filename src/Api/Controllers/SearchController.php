@@ -425,6 +425,11 @@ class SearchController extends ListDiscussionsController
                 continue;
             }
 
+            if ($part === 'is:tagsticky') {
+                $parsedFilters['is_tag_sticky'] = true;
+                continue;
+            }
+
             $freeText[] = $part;
         }
 
@@ -550,12 +555,17 @@ class SearchController extends ListDiscussionsController
             $stickyQuery = new OngrBoolQuery();
             $stickyQuery->add(new OngrTermQuery('is_sticky', true), OngrBoolQuery::SHOULD);
             $stickyQuery->add(new OngrTermQuery('is_stickiest', true), OngrBoolQuery::SHOULD);
+            $stickyQuery->add(new OngrTermQuery('is_tag_sticky', true), OngrBoolQuery::SHOULD);
             $stickyQuery->setParameters(['minimum_should_match' => 1]);
             $bool->add($stickyQuery, OngrBoolQuery::FILTER);
         }
 
         if (!empty($filters['is_stickiest'])) {
             $bool->add(new OngrTermQuery('is_stickiest', true), OngrBoolQuery::FILTER);
+        }
+
+        if (!empty($filters['is_tag_sticky'])) {
+            $bool->add(new OngrTermQuery('is_tag_sticky', true), OngrBoolQuery::FILTER);
         }
     }
 }
