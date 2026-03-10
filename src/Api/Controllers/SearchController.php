@@ -100,11 +100,12 @@ class SearchController extends ListDiscussionsController
         $ongr_search = new Search();
         $ongr_search->setSize($limit + $offset + 1);
         $ongr_search->setFrom(0);
-        $ongr_search->setMinScore(0.2);
 
         //echo($search);
 
         if (!empty($search)) {
+            $ongr_search->setMinScore(0.2);
+
             if ($this->matchSentences) {
                 // MODIFIED: 适配新的查询结构
                 $filterQuery->add($this->sentenceMatch($search), OngrBoolQuery::SHOULD);
@@ -483,6 +484,8 @@ class SearchController extends ListDiscussionsController
                 $discussionIdQuery->add(new OngrTermQuery('rawId', $discussionId), OngrBoolQuery::SHOULD);
             }
 
+            $discussionIdQuery->setParameters(['minimum_should_match' => 1]);
+
             $bool->add($discussionIdQuery, OngrBoolQuery::FILTER);
         }
 
@@ -493,6 +496,8 @@ class SearchController extends ListDiscussionsController
                 $userQuery->add(new OngrTermQuery('user_id', $userId), OngrBoolQuery::SHOULD);
             }
 
+            $userQuery->setParameters(['minimum_should_match' => 1]);
+
             $bool->add($userQuery, OngrBoolQuery::FILTER);
         }
 
@@ -502,6 +507,8 @@ class SearchController extends ListDiscussionsController
             foreach (array_unique($filters['tag_ids']) as $tagId) {
                 $tagQuery->add(new OngrTermQuery('tags', $tagId), OngrBoolQuery::SHOULD);
             }
+
+            $tagQuery->setParameters(['minimum_should_match' => 1]);
 
             $bool->add($tagQuery, OngrBoolQuery::FILTER);
         }
