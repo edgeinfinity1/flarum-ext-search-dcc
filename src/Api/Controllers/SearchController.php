@@ -273,12 +273,7 @@ class SearchController extends ListDiscussionsController
             ->keyBy('id')
             ->when(!$sorts_all, function($discussions) {return $discussions->sortByDesc('weight');})
             ->when($sorts_all, function($discussions) {return $discussions->sortByDesc('filter_weight');})
-            //->sortByDesc('weight')
             ->unique();
-        // if ($limit < 20) {
-        //     $discussions = $discussions->take($limit);
-        // }
-        //echo(count($discussions));
 
         $this->loadRelations($discussions, $include);
 
@@ -378,10 +373,26 @@ class SearchController extends ListDiscussionsController
                 continue;
             }
 
-            if (preg_match('/^(?:user|author):(.+)$/', $part, $matches) === 1) {
+            if (preg_match('/^user:(.+)$/', $part, $matches) === 1) {
                 $parsedFilters['user_ids'] = array_merge(
                     $parsedFilters['user_ids'] ?? [],
                     $this->resolveUserIds(explode(',', $matches[1]))
+                );
+                $parsedFilters['types'] = array_merge(
+                    $parsedFilters['types'] ?? [],
+                    ['discussions', 'posts']
+                );
+                continue;
+            }
+
+            if (preg_match('/^author:(.+)$/', $part, $matches) === 1) {
+                $parsedFilters['user_ids'] = array_merge(
+                    $parsedFilters['user_ids'] ?? [],
+                    $this->resolveUserIds(explode(',', $matches[1]))
+                );
+                $parsedFilters['types'] = array_merge(
+                    $parsedFilters['types'] ?? [],
+                    ['discussions']
                 );
                 continue;
             }
@@ -492,6 +503,18 @@ class SearchController extends ListDiscussionsController
             $discussionIdQuery->setParameters(['minimum_should_match' => 1]);
 
             $bool->add($discussionIdQuery, OngrBoolQuery::FILTER);
+        }
+
+        if (!empty($filters['types'])) {
+            $typeQuery = new OngrBoolQuery();
+
+            foreach (array_unique($filters['types']) as $type) {
+                $typeQuery->add(new OngrTermQuery('type', $type), OngrBoolQuery::SHOULD);
+            }
+
+            $typeQuery->setParameters(['minimum_should_match' => 1]);
+
+            $bool->add($typeQuery, OngrBoolQuery::FILTER);
         }
 
         if (!empty($filters['user_ids'])) {
