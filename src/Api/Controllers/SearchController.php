@@ -12,9 +12,6 @@
 
 namespace Blomstra\Search\Api\Controllers;
 
-use Blomstra\Search\Elasticsearch\MatchPhraseQuery;
-use Blomstra\Search\Elasticsearch\MatchQuery;
-use Blomstra\Search\Elasticsearch\TermsQuery;
 use Blomstra\Search\Save\Document as ElasticDocument;
 use Blomstra\Search\Searchers\Searcher;
 use Elasticsearch\Client;
@@ -26,6 +23,7 @@ use Flarum\Http\RequestUtil;
 use Flarum\Http\UrlGenerator;
 use Flarum\Settings\SettingsRepositoryInterface;
 use Flarum\Tags\TagRepository;
+use Flarum\User\User;
 use Illuminate\Contracts\Container\Container;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
@@ -82,7 +80,8 @@ class SearchController extends ListDiscussionsController
 
         $filters = $this->extractFilter($request);
 
-        $search = $this->getSearch($filters);
+        $searchParsing = $this->parseSearchFilters($filters, $actor);
+        $search = $searchParsing['search'];
 
         $limit = $this->extractLimit($request);
         
@@ -121,10 +120,7 @@ class SearchController extends ListDiscussionsController
             $filterQuery->add($tagFilter, OngrBoolQuery::FILTER);
         }
 
-        $onlyPrivate = Str::contains($filters['q'] ?? '', 'is:private');
-        if ($onlyPrivate) {
-            $filterQuery->add(new OngrTermQuery('is_private', 'true'), OngrBoolQuery::FILTER);
-        }
+        $this->applyParsedFilters($filterQuery, $searchParsing['filters']);
 
         $baseQuery = $filterQuery;
         
@@ -353,21 +349,169 @@ class SearchController extends ListDiscussionsController
 
     }
 
-    protected function getSearch(array $filters): ?string
+    protected function parseSearchFilters(array $filters, $actor): array
     {
         $search = Arr::get($filters, 'q');
 
-        if ($search) {
-            $q = collect(explode(' ', $search))
-                ->filter(function (string $part) {
-                    return $part !== 'is:private';
-                })
-                ->filter()
-                ->join(' ');
-
-            return empty($q) ? null : $q;
+        if (!$search) {
+            return ['search' => null, 'filters' => []];
         }
 
-        return null;
+        $parsedFilters = [];
+        $freeText = [];
+
+        foreach (explode(' ', $search) as $part) {
+            $part = trim($part);
+
+            if ($part === '') {
+                continue;
+            }
+
+            if (preg_match('/^#(\d+)$/', $part, $matches) === 1) {
+                $parsedFilters['discussion_ids'][] = (int) $matches[1];
+                continue;
+            }
+
+            if (preg_match('/^(?:id|discussion):(\d+)$/', $part, $matches) === 1) {
+                $parsedFilters['discussion_ids'][] = (int) $matches[1];
+                continue;
+            }
+
+            if (preg_match('/^(?:user|author):(.+)$/', $part, $matches) === 1) {
+                $parsedFilters['user_ids'] = array_merge(
+                    $parsedFilters['user_ids'] ?? [],
+                    $this->resolveUserIds(explode(',', $matches[1]))
+                );
+                continue;
+            }
+
+            if (preg_match('/^tag:(.+)$/', $part, $matches) === 1) {
+                $parsedFilters['tag_ids'] = array_merge(
+                    $parsedFilters['tag_ids'] ?? [],
+                    $this->resolveTagIds(explode(',', $matches[1]), $actor)
+                );
+                continue;
+            }
+
+            if ($part === 'is:private') {
+                $parsedFilters['is_private'] = true;
+                continue;
+            }
+
+            if ($part === 'is:public') {
+                $parsedFilters['is_private'] = false;
+                continue;
+            }
+
+            if ($part === 'is:sticky') {
+                $parsedFilters['is_sticky'] = true;
+                continue;
+            }
+
+            $freeText[] = $part;
+        }
+
+        return [
+            'search'  => empty($freeText) ? null : implode(' ', $freeText),
+            'filters' => $parsedFilters,
+        ];
+    }
+
+    protected function resolveUserIds(array $references): array
+    {
+        $references = collect($references)
+            ->map(fn (string $reference) => trim($reference))
+            ->filter()
+            ->unique()
+            ->values();
+
+        $numericIds = $references
+            ->filter(fn (string $reference) => ctype_digit($reference))
+            ->map(fn (string $reference) => (int) $reference)
+            ->values()
+            ->all();
+
+        $usernames = $references
+            ->reject(fn (string $reference) => ctype_digit($reference))
+            ->values();
+
+        if ($usernames->isNotEmpty()) {
+            $idsByUsername = User::query()
+                ->whereIn('username', $usernames->all())
+                ->pluck('id')
+                ->all();
+
+            $numericIds = array_merge($numericIds, $idsByUsername);
+        }
+
+        return array_values(array_unique($numericIds));
+    }
+
+    protected function resolveTagIds(array $references, $actor): array
+    {
+        $references = collect($references)
+            ->map(fn (string $reference) => trim($reference))
+            ->filter()
+            ->unique()
+            ->values();
+
+        $tagIds = [];
+
+        foreach ($references as $reference) {
+            if (ctype_digit($reference)) {
+                $tagIds[] = (int) $reference;
+                continue;
+            }
+
+            $id = $this->tagrepo->getIdForSlug($reference, $actor);
+
+            if ($id) {
+                $tagIds[] = (int) $id;
+            }
+        }
+
+        return array_values(array_unique($tagIds));
+    }
+
+    protected function applyParsedFilters(OngrBoolQuery $bool, array $filters): void
+    {
+        if (!empty($filters['discussion_ids'])) {
+            $discussionIdQuery = new OngrBoolQuery();
+            $discussionIdQuery->add(new OngrTermQuery('type', 'discussions'), OngrBoolQuery::FILTER);
+
+            foreach (array_unique($filters['discussion_ids']) as $discussionId) {
+                $discussionIdQuery->add(new OngrTermQuery('rawId', $discussionId), OngrBoolQuery::SHOULD);
+            }
+
+            $bool->add($discussionIdQuery, OngrBoolQuery::FILTER);
+        }
+
+        if (!empty($filters['user_ids'])) {
+            $userQuery = new OngrBoolQuery();
+
+            foreach (array_unique($filters['user_ids']) as $userId) {
+                $userQuery->add(new OngrTermQuery('user_id', $userId), OngrBoolQuery::SHOULD);
+            }
+
+            $bool->add($userQuery, OngrBoolQuery::FILTER);
+        }
+
+        if (!empty($filters['tag_ids'])) {
+            $tagQuery = new OngrBoolQuery();
+
+            foreach (array_unique($filters['tag_ids']) as $tagId) {
+                $tagQuery->add(new OngrTermQuery('tags', $tagId), OngrBoolQuery::SHOULD);
+            }
+
+            $bool->add($tagQuery, OngrBoolQuery::FILTER);
+        }
+
+        if (array_key_exists('is_private', $filters)) {
+            $bool->add(new OngrTermQuery('is_private', $filters['is_private']), OngrBoolQuery::FILTER);
+        }
+
+        if (!empty($filters['is_sticky'])) {
+            $bool->add(new OngrTermQuery('is_sticky', true), OngrBoolQuery::FILTER);
+        }
     }
 }
