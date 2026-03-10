@@ -112,6 +112,10 @@ class DiscussionSeeder extends Seeder
             $document['is_sticky'] = (bool) $model->is_sticky;
         }
 
+        if ($this->extensionEnabled('the-turk-stickiest')) {
+            $document['is_stickiest'] = (bool) $model->is_stickiest;
+        }
+
         return $document;
     }
 }

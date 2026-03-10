@@ -409,6 +409,11 @@ class SearchController extends ListDiscussionsController
                 continue;
             }
 
+            if ($part === 'is:stickiest') {
+                $parsedFilters['is_stickiest'] = true;
+                continue;
+            }
+
             $freeText[] = $part;
         }
 
@@ -518,7 +523,16 @@ class SearchController extends ListDiscussionsController
         }
 
         if (!empty($filters['is_sticky'])) {
-            $bool->add(new OngrTermQuery('is_sticky', true), OngrBoolQuery::FILTER);
+            // To make it native-like
+            $stickyQuery = new OngrBoolQuery();
+            $stickyQuery->add(new OngrTermQuery('is_sticky', true), OngrBoolQuery::SHOULD);
+            $stickyQuery->add(new OngrTermQuery('is_stickiest', true), OngrBoolQuery::SHOULD);
+            $stickyQuery->setParameters(['minimum_should_match' => 1]);
+            $bool->add($stickyQuery, OngrBoolQuery::FILTER);
+        }
+
+        if (!empty($filters['is_stickiest'])) {
+            $bool->add(new OngrTermQuery('is_stickiest', true), OngrBoolQuery::FILTER);
         }
     }
 }

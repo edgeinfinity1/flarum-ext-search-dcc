@@ -88,6 +88,7 @@ class BuildCommand extends Command
                 'recipient_users'  => ['type' => 'integer'],
                 'comment_count'    => ['type' => 'integer'],
                 'view_count'       => ['type' => 'integer'],
+                'is_stickiest'     => ['type' => 'boolean'],
             ],
         ];
 
